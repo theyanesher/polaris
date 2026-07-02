@@ -53,6 +53,52 @@ def setup_curobo(robot_cfg="franka_robotiq_2f_85.yml"):
 
     return motion_gen
 
+
+def setup_curobo_ik(robot_cfg="franka_robotiq_2f_85.yml"):
+    """Create a lightweight IK-only solver without world meshes or CUDA graphs.
+
+    Policy clients only need pose-to-joint conversion. Avoiding MotionGen keeps
+    its mesh cache and captured CUDA graphs from sharing a context with the
+    Gaussian-splat renderer used by evaluation.
+    """
+    from curobo.types.base import TensorDeviceType
+    from curobo.util_file import (
+        get_assets_path,
+        get_robot_configs_path,
+        join_path,
+        load_yaml,
+    )
+    from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
+
+    resolved_robot_cfg = robot_cfg
+    if isinstance(robot_cfg, str):
+        resolved_robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_cfg))
+        kinematics = resolved_robot_cfg["robot_cfg"]["kinematics"]
+        if kinematics.get("use_usd_kinematics", False):
+            usd_path = join_path(get_assets_path(), kinematics.get("usd_path", ""))
+            if not os.path.isfile(usd_path):
+                urdf_path = join_path(get_assets_path(), kinematics["urdf_path"])
+                if not os.path.isfile(urdf_path):
+                    raise FileNotFoundError(
+                        f"Neither configured USD ({usd_path}) nor URDF ({urdf_path}) exists"
+                    )
+                print(f"[cuRobo IK] using URDF: {urdf_path}")
+                kinematics["use_usd_kinematics"] = False
+
+    tensor_args = TensorDeviceType()
+    config = IKSolverConfig.load_from_robot_config(
+        resolved_robot_cfg,
+        None,
+        tensor_args=tensor_args,
+        num_seeds=20,
+        position_threshold=0.005,
+        rotation_threshold=0.05,
+        self_collision_check=False,
+        self_collision_opt=False,
+        use_cuda_graph=False,
+    )
+    return IKSolver(config)
+
 class MotionPlanner:
     def __init__(
         self,

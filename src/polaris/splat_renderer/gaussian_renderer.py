@@ -37,6 +37,11 @@ def render_3dgs(viewpoint_camera, pc, pipe, bg_color, scaling_modifier=1.0):
 
     rasterizer = GaussianRasterizer3DGS(raster_settings=raster_settings)
 
+    # Isaac Sim initializes multiple GPUs and can leave a different CUDA device
+    # current. The rasterizer extension allocates scratch buffers on the current
+    # device. Keep it pinned to the Gaussian/environment device after rendering
+    # as well, since IsaacLab managers also allocate using the current device.
+    torch.cuda.set_device(pc.get_xyz.device)
     rendered_image, radii = rasterizer(
         means3D=pc.get_xyz,
         means2D=screenspace_points,

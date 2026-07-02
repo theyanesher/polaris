@@ -42,13 +42,17 @@ class PolicyArgs:
     host: str = "localhost"
     port: int = 8000
     open_loop_horizon: int | None = 8
-    policy_path: tuple[str, ...] | str = None
+    policy_path: tuple[str, ...] | str | None = None
     device : str = "cuda:0"
     config_path: str | None = None
     dataset_meta: str | None = None
     cam_key: str = "cam1"
     obs_horizon: int = 2
     render_gripper_only: bool = False
+    # Optional simulator camera keys used by three-camera policy clients.
+    cam0_key: str = "cam0"
+    cam1_key: str = "cam1"
+    wrist_cam_key: str = "wrist_cam"
 
 
 @dataclass
