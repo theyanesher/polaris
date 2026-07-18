@@ -22,12 +22,12 @@ object_randomization:
 
 waypoints:
   - object: red_cup
-    offset: [0.0, -0.05, 0.1]       # move
+    offset: [0.0, 0.05, 0.1]       # move  (handle:0.055,0) (left-rim:0,-0.05) (right-rim:0,0.05)
     rel_quat: [0.0, 1.0, 0.0, 0.0]   # w x y z
     grasp: 0
     subgoal: False
   - object: red_cup
-    offset: [0.0, -0.05, -0.02]     # pregrasp
+    offset: [0.0, 0.05, -0.02]     # pregrasp
     rel_quat: [0.0, 1.0, 0.0, 0.0]   
     grasp: 0
     subgoal: True

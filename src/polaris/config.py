@@ -70,9 +70,11 @@ class EvalArgs:
     env_folder: str | None = None
     task_config: str | None = None  # Path to a custom task_config.yaml (overrides env_folder/task_config.yaml)
     device: str = "cuda:0"
-    max_episode_length: int = 300 # max_episode_length = episode_length_s / (dt * decimation)
+    max_episode_length: int = 500 # max_episode_length = episode_length_s / (dt * decimation)
+    control_frequency_hz: float | None = None  # Optional policy/environment step rate override.
     tqdm_position: int = 0
     seed: int = 42
+    save_video: bool = True
 
 
 @dataclass

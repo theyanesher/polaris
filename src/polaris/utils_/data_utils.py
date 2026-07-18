@@ -107,6 +107,10 @@ class ObsRecorder:
 
 
     def save_episode(self):
+        if len(self.all_obs) <= 1:
+            print("[warn] Skipping save_episode because not enough observations were collected.")
+            return
+
         self.process_obs()
         ep_dir = os.path.join(self.save_dir, f"episode_{self.ep_idx:06d}")
         os.makedirs(ep_dir, exist_ok=True)

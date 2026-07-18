@@ -1,7 +1,7 @@
 import torch
 from scipy.spatial.transform import Rotation
-import numpy as np
 import os
+from pathlib import Path
 
 from polaris.utils_.data_utils import ObsRecorder
 from polaris.utils_.eval_utils import is_success
@@ -12,6 +12,33 @@ def setup_curobo(robot_cfg="franka_robotiq_2f_85.yml"):
     from curobo.util.usd_helper import UsdHelper
     from curobo.types.base import TensorDeviceType
     from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig
+    from curobo.util_file import (
+        get_assets_path,
+        get_robot_configs_path,
+        join_path,
+        load_yaml,
+    )
+
+    resolved_robot_cfg = robot_cfg
+    if isinstance(robot_cfg, str):
+        resolved_robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_cfg))
+        kinematics = resolved_robot_cfg["robot_cfg"]["kinematics"]
+        if kinematics.get("use_usd_kinematics", False):
+            usd_path = join_path(get_assets_path(), kinematics.get("usd_path", ""))
+            if not os.path.isfile(usd_path):
+                polaris_root = Path(__file__).resolve().parents[3]
+                simulator_usd = (
+                    polaris_root
+                    / "PolaRiS-Hub/nvidia_droid/franka_robotiq_2f_85_flattened.usd"
+                )
+                if not simulator_usd.is_file():
+                    raise FileNotFoundError(
+                        f"Configured CuRobo USD is missing ({usd_path}) and simulator "
+                        f"USD was not found at {simulator_usd}"
+                    )
+                kinematics["usd_path"] = str(simulator_usd)
+                kinematics["usd_robot_root"] = "/panda"
+                print(f"[cuRobo] using simulator USD: {simulator_usd}")
 
     stage = omni.usd.get_context().get_stage()
     assert stage is not None
@@ -42,7 +69,7 @@ def setup_curobo(robot_cfg="franka_robotiq_2f_85.yml"):
     tensor_args = TensorDeviceType()
 
     motion_gen_config = MotionGenConfig.load_from_robot_config(
-        robot_cfg,
+        resolved_robot_cfg,
         world_cfg,
         tensor_args,
         interpolation_dt=0.02,
@@ -77,13 +104,23 @@ def setup_curobo_ik(robot_cfg="franka_robotiq_2f_85.yml"):
         if kinematics.get("use_usd_kinematics", False):
             usd_path = join_path(get_assets_path(), kinematics.get("usd_path", ""))
             if not os.path.isfile(usd_path):
-                urdf_path = join_path(get_assets_path(), kinematics["urdf_path"])
-                if not os.path.isfile(urdf_path):
+                # The bundled URDF was exported from Isaac USD and has joint
+                # axes that require the usd_flip_joints mapping. Falling back
+                # to its plain URDF parser produces incorrect FK. Use the
+                # actual simulator USD from PolaRiS-Hub instead.
+                polaris_root = Path(__file__).resolve().parents[3]
+                simulator_usd = (
+                    polaris_root
+                    / "PolaRiS-Hub/nvidia_droid/franka_robotiq_2f_85_flattened.usd"
+                )
+                if not simulator_usd.is_file():
                     raise FileNotFoundError(
-                        f"Neither configured USD ({usd_path}) nor URDF ({urdf_path}) exists"
+                        f"Configured CuRobo USD is missing ({usd_path}) and simulator "
+                        f"USD was not found at {simulator_usd}"
                     )
-                print(f"[cuRobo IK] using URDF: {urdf_path}")
-                kinematics["use_usd_kinematics"] = False
+                kinematics["usd_path"] = str(simulator_usd)
+                kinematics["usd_robot_root"] = "/panda"
+                print(f"[cuRobo IK] using simulator USD: {simulator_usd}")
 
     tensor_args = TensorDeviceType()
     config = IKSolverConfig.load_from_robot_config(

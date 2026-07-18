@@ -15,6 +15,7 @@ def analyze_results(base_dir, stages=3):
             continue
         
         df = pd.read_csv(csv_path)
+        df = df[df["episode"].astype(str) != "summary"].copy()
         
         num_episodes = len(df)
         

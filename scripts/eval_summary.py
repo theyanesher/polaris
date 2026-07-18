@@ -10,6 +10,8 @@ import argparse
 import pandas as pd
 from pathlib import Path
 
+SUMMARY_ROW = "summary"
+
 
 def infer_num_stages(progress_series: pd.Series) -> int:
     nonzero = progress_series[progress_series > 1e-9]
@@ -22,6 +24,8 @@ def infer_num_stages(progress_series: pd.Series) -> int:
 
 def summarize(csv_path: Path):
     df = pd.read_csv(csv_path)
+    df = df[df["episode"].astype(str) != SUMMARY_ROW].copy()
+    df["success"] = df["success"].map(lambda val: str(val).strip().lower() == "true")
     n = len(df)
     if n == 0:
         print("No episodes found.")

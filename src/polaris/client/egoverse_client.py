@@ -15,7 +15,7 @@ from polaris.config import PolicyArgs
 
 @InferenceClient.register(client_name="EgoVerse")
 class EgoVerseClient(InferenceClient):
-    """Send three RGB views + EEF state and execute returned Cartesian chunks."""
+    """Send the trained third-person+wrist views and execute Cartesian chunks."""
 
     def __init__(self, args: PolicyArgs) -> None:
         self.args = args
@@ -24,8 +24,9 @@ class EgoVerseClient(InferenceClient):
             raise ValueError("open_loop_horizon must be >= 1")
 
         self.camera_keys = {
-            "front_img_1": getattr(args, "cam0_key", "cam0"),
-            "front_img_2": getattr(args, "cam1_key", "cam1"),
+            # The training dataset's Azure Kinect left view matches the
+            # simulator's cam1 rendering (verified from crop previews).
+            "front_img_1": getattr(args, "cam1_key", "cam1"),
             "wrist_img": getattr(args, "wrist_cam_key", "wrist_cam"),
         }
         context = zmq.Context.instance()
@@ -104,13 +105,52 @@ class EgoVerseClient(InferenceClient):
         quat_xyzw = Rotation.from_euler("ZYX", action[3:6]).as_quat()
         quat_wxyz = np.asarray(quat_xyzw[[3, 0, 1, 2]], dtype=np.float32)
         quaternion = torch.from_numpy(quat_wxyz).view(1, 4).to(self.args.device)
-        result = self.ik_solver.solve_single(Pose(position=position, quaternion=quaternion))
-        if result.success.item():
-            joints = result.solution.squeeze(0)[0, :7].detach().cpu().numpy()
+        current_joints = (
+            obs["policy"]["arm_joint_pos"][0]
+            .detach()
+            .to(device=self.args.device, dtype=torch.float32)
+            .view(1, 7)
+        )
+        # CuRobo's Franka+Robotiq configuration has 13 c-space entries: the
+        # seven Panda joints followed by six gripper/mimic joints. Build a
+        # full-DOF seed in its declared order and retain configured values for
+        # joints that do not affect the grasp-frame IK target.
+        current_cspace = self.ik_solver.get_retract_config().detach().clone().view(1, -1)
+        current_cspace[:, :7] = current_joints
+        num_seeds = self.ik_solver.num_seeds
+        local_seeds = current_cspace.unsqueeze(1).repeat(1, num_seeds, 1)
+        if num_seeds > 1:
+            # Keep every seed in the current IK branch. The first seed is the
+            # exact current state; the rest provide small local alternatives.
+            generator = torch.Generator(device=self.args.device).manual_seed(0)
+            perturbation = torch.randn(
+                (1, num_seeds - 1, 7),
+                device=self.args.device,
+                dtype=torch.float32,
+                generator=generator,
+            ) * 0.025
+            local_seeds[:, 1:, :7] += perturbation
+        # Franka has multiple IK branches. Seed and regularize at the current
+        # configuration, then choose the closest successful solution instead
+        # of allowing independent random-seed branch changes each timestep.
+        result = self.ik_solver.solve_single(
+            Pose(position=position, quaternion=quaternion),
+            retract_config=current_cspace,
+            seed_config=local_seeds,
+            return_seeds=num_seeds,
+        )
+        success = result.success.reshape(-1)
+        solutions = result.solution.reshape(-1, result.solution.shape[-1])[:, :7]
+        if bool(success.any()):
+            valid = solutions[success]
+            distance = torch.linalg.vector_norm(valid[:, :7] - current_joints, dim=-1)
+            closest_index = torch.argmin(distance)
+            closest = valid[closest_index, :7]
+            joints = closest.detach().cpu().numpy()
         else:
             print("[EgoVerseClient] IK failed; holding current arm joints")
-            joints = obs["policy"]["arm_joint_pos"][0].detach().cpu().numpy()
-        gripper = np.float32(1.0 if action[6] >= 0.5 else 0.0)
+            joints = current_joints[0].detach().cpu().numpy()
+        gripper = np.float32(1.0 if action[6] >= 0.2 else 0.0)
         return np.concatenate([joints, [gripper]]).astype(np.float32)
 
     def infer(

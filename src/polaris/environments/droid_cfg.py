@@ -544,9 +544,9 @@ class EnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.eye = (4.5, 0.0, 6.0)
         self.viewer.lookat = (0.0, 0.0, 0.0)
 
-        self.decimation = 4 * 2
+        self.decimation = 4 
         self.sim.dt = 1 / (60 * 2)
-        self.sim.render_interval = 4 * 2
+        self.sim.render_interval = 4 
 
         self.rerender_on_reset = True
 

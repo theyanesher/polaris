@@ -17,6 +17,83 @@ from polaris.config import EvalArgs
 from polaris.utils_.eval_utils import randomize_object_poses, set_seed
 import numpy as np
 
+SUMMARY_ROW = "summary"
+
+
+def _episode_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Return only rollout rows, ignoring the aggregate summary footer."""
+    if df.empty or "episode" not in df.columns:
+        return df
+    return df[df["episode"].astype(str) != SUMMARY_ROW].copy()
+
+
+def _write_eval_results_with_summary(df: pd.DataFrame, csv_path: Path) -> None:
+    episode_df = _episode_rows(df)
+    summary_df = episode_df.copy()
+    summary_success = summary_df["success"].map(
+        lambda val: str(val).strip().lower() == "true"
+    )
+
+    num_episodes = len(summary_df)
+    num_success = int(summary_success.sum()) if num_episodes else 0
+    success_rate = num_success / num_episodes if num_episodes else 0.0
+    avg_progress = float(summary_df["progress"].mean()) if num_episodes else 0.0
+    avg_episode_length = (
+        float(summary_df["episode_length"].mean()) if num_episodes else 0.0
+    )
+
+    for col in ["num_success", "success_rate", "avg_progress", "avg_episode_length"]:
+        if col not in episode_df.columns:
+            episode_df[col] = pd.NA
+
+    summary_row = {
+        "episode": SUMMARY_ROW,
+        "episode_length": avg_episode_length,
+        "success": num_success,
+        "progress": avg_progress,
+        "num_success": num_success,
+        "success_rate": success_rate,
+        "avg_progress": avg_progress,
+        "avg_episode_length": avg_episode_length,
+    }
+    episode_df = pd.concat([episode_df, pd.DataFrame([summary_row])], ignore_index=True)
+    episode_df.to_csv(csv_path, index=False)
+
+
+def _as_bool(value) -> bool:
+    if isinstance(value, torch.Tensor):
+        return bool(value.detach().cpu().item())
+    if isinstance(value, np.ndarray):
+        return bool(value.item())
+    if isinstance(value, (list, tuple)):
+        return bool(value[0]) if value else False
+    return bool(value)
+
+
+def _video_frame_from_obs(obs: dict, fallback: np.ndarray | None = None) -> np.ndarray | None:
+    splat = obs.get("splat", {})
+    if not isinstance(splat, dict) or not splat:
+        return fallback
+
+    preferred_pairs = [
+        ("cam1", "wrist_cam"),
+        ("external_cam", "wrist_cam"),
+        ("front_img_1", "wrist_img"),
+    ]
+    for left_key, right_key in preferred_pairs:
+        if left_key in splat and right_key in splat:
+            left = np.asarray(splat[left_key])
+            right = np.asarray(splat[right_key])
+            if left.ndim == right.ndim == 3 and left.shape[0] == right.shape[0]:
+                return np.ascontiguousarray(np.concatenate([left, right], axis=1))
+
+    for key in ("cam1", "external_cam", "front_img_1", "wrist_cam", "wrist_img"):
+        if key in splat:
+            return np.ascontiguousarray(np.asarray(splat[key]))
+
+    return np.ascontiguousarray(np.asarray(next(iter(splat.values()))))
+
+
 def main(eval_args: EvalArgs):
     set_seed(eval_args.seed)
     # This must be done before importing anything from IsaacLab
@@ -48,6 +125,23 @@ def main(eval_args: EvalArgs):
         use_fabric=True,
     )
 
+    if eval_args.control_frequency_hz is not None:
+        if eval_args.control_frequency_hz <= 0:
+            raise ValueError("control_frequency_hz must be positive")
+        decimation = 1.0 / (env_cfg.sim.dt * eval_args.control_frequency_hz)
+        rounded_decimation = round(decimation)
+        if not np.isclose(decimation, rounded_decimation):
+            raise ValueError(
+                f"Requested {eval_args.control_frequency_hz} Hz cannot be represented "
+                f"exactly with sim.dt={env_cfg.sim.dt}; decimation={decimation}"
+            )
+        env_cfg.decimation = int(rounded_decimation)
+        env_cfg.sim.render_interval = env_cfg.decimation
+        print(
+            f"Overriding environment control rate to {eval_args.control_frequency_hz:g} Hz "
+            f"(sim.dt={env_cfg.sim.dt}, decimation={env_cfg.decimation})"
+        )
+
     env_cfg.episode_length_s = eval_args.max_episode_length * (env_cfg.sim.dt * env_cfg.decimation)
     
     env: ManagerBasedRLSplatEnv = gym.make(eval_args.environment, cfg=env_cfg)  # type: ignore
@@ -71,7 +165,7 @@ def main(eval_args: EvalArgs):
     run_folder.mkdir(parents=True, exist_ok=True)
     csv_path = run_folder / "eval_results.csv"
     if csv_path.exists():
-        episode_df = pd.read_csv(csv_path)
+        episode_df = _episode_rows(pd.read_csv(csv_path))
     else:
         episode_df = pd.DataFrame(
             {
@@ -101,31 +195,34 @@ def main(eval_args: EvalArgs):
     print(f" >>> Starting eval job from episode {episode + 1} of {rollouts} <<< ")
     while True:
         action, viz = policy_client.infer(obs, language_instruction, return_viz=True)
-        if viz is not None:
-            video.append(viz)
         obs, rew, term, trunc, info = env.step(
             torch.tensor(action).reshape(1, -1), expensive=True
         )
+        if eval_args.save_video:
+            frame = _video_frame_from_obs(obs, fallback=viz)
+            if frame is not None:
+                video.append(frame)
 
         bar.update(1)
-        if term[0] or trunc[0] or bar.n >= horizon:
+        success = _as_bool(info["rubric"]["success"])
+        if term[0] or trunc[0] or success or bar.n >= horizon:
             policy_client.reset()
 
-            # Save video and metadata
-            filename = run_folder / f"episode_{episode}.mp4"
-            mediapy.write_video(filename, video, fps=15)
+            if eval_args.save_video:
+                filename = run_folder / f"episode_{episode}.mp4"
+                mediapy.write_video(filename, video, fps=15)
 
             # Log episode results to CSV
             episode_data = {
                 "episode": episode,
                 "episode_length": bar.n,
-                "success": info["rubric"]["success"],
+                "success": success,
                 "progress": info["rubric"]["progress"],
             }
             episode_df = pd.concat(
                 [episode_df, pd.DataFrame([episode_data])], ignore_index=True
             )
-            episode_df.to_csv(csv_path, index=False)
+            _write_eval_results_with_summary(episode_df, csv_path)
 
             bar.close()
             print(f"Episode {episode} finished. Episode length: {bar.n}")
