@@ -7,6 +7,15 @@ import polaris.splat_renderer.utils.sh_utils as sh_utils
 import polaris.splat_renderer.utils.point_utils as point_utils
 
 def render_3dgs(viewpoint_camera, pc, pipe, bg_color, scaling_modifier=1.0):
+    if pc.get_xyz.ndim != 2 or pc.get_xyz.shape[1] != 3:
+        raise ValueError(
+            "Invalid 3D Gaussian model: expected xyz shape (N, 3), got "
+            f"{tuple(pc.get_xyz.shape)}. Check that the environment contains at "
+            "least one splat asset and that all loaded models use 3D positions."
+        )
+    # The simulator and Gaussian renderer may intentionally use different
+    # GPUs. Select the Gaussian device before any implicit CUDA allocation.
+    torch.cuda.set_device(pc.get_xyz.device)
     screenspace_points = (
         torch.zeros_like(
             pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda"
@@ -41,7 +50,6 @@ def render_3dgs(viewpoint_camera, pc, pipe, bg_color, scaling_modifier=1.0):
     # current. The rasterizer extension allocates scratch buffers on the current
     # device. Keep it pinned to the Gaussian/environment device after rendering
     # as well, since IsaacLab managers also allocate using the current device.
-    torch.cuda.set_device(pc.get_xyz.device)
     rendered_image, radii = rasterizer(
         means3D=pc.get_xyz,
         means2D=screenspace_points,

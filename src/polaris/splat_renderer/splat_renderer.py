@@ -237,8 +237,7 @@ class SplatRenderer3DGS:
         self.init_models()
         print("Finished loading models!")
 
-    def _load_into_model(self, pcd_path):
-        name = Path(pcd_path).stem
+    def _load_into_model(self, name, pcd_path):
         model = GaussianModel(3)
         model.load_ply(pcd_path, "3dgs")
 
@@ -257,13 +256,13 @@ class SplatRenderer3DGS:
                 setattr(self.model, attr, getattr(self.model, attr).to(self.device))
 
         for name, pcd_path in self.pcds.items():
-            self._load_into_model(pcd_path)
+            self._load_into_model(name, pcd_path)
 
         self._clone_originals()
 
     def add_splats(self, splats):
         for name, pcd_path in splats.items():
-            self._load_into_model(pcd_path)
+            self._load_into_model(name, pcd_path)
         self._clone_originals()
 
     def _clone_originals(self):

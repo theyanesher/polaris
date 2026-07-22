@@ -29,6 +29,24 @@ def _write_eval_results_with_summary(df: pd.DataFrame, csv_path: Path) -> None:
         float(summary_df["episode_length"].mean()) if num_episodes else 0.0
     )
 
+    grasp_summary = {}
+    for col in (
+        "grasp_succeeded",
+        "grasp_succeeded_first_attempt",
+        "pick_left_side",
+        "pick_right_side",
+        "pick_through_handle",
+    ):
+        if col in summary_df:
+            measured = summary_df[col].dropna()
+            values = measured.map(lambda val: str(val).strip().lower() == "true")
+            grasp_summary[f"{col}_rate"] = float(values.mean()) if len(values) else 0.0
+    if "grasp_attempts" in summary_df:
+        attempts = pd.to_numeric(summary_df["grasp_attempts"], errors="coerce").dropna()
+        grasp_summary["avg_grasp_attempts"] = (
+            float(attempts.mean()) if len(attempts) else 0.0
+        )
+
     for col in ["num_success", "success_rate", "avg_progress", "avg_episode_length"]:
         if col not in episode_df.columns:
             episode_df[col] = pd.NA
@@ -42,6 +60,7 @@ def _write_eval_results_with_summary(df: pd.DataFrame, csv_path: Path) -> None:
         "success_rate": success_rate,
         "avg_progress": avg_progress,
         "avg_episode_length": avg_episode_length,
+        **grasp_summary,
     }
     episode_df = pd.concat([episode_df, pd.DataFrame([summary_row])], ignore_index=True)
     episode_df.to_csv(csv_path, index=False)

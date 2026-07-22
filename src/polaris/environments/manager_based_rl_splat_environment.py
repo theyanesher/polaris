@@ -238,7 +238,11 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
             path = Path(self.usd_file).parent / "assets" / name / "splat.ply"
             if path.exists():
                 splats[name] = path
-            else:
+
+            # Optionally fill holes in static Gaussian reconstructions (for
+            # example, the tabletop) with the registered simulator mesh.
+            static_overlay = getattr(self.cfg, "static_mesh_overlay", False)
+            if not path.exists() or (static_overlay and "static" in name):
                 # apply semantic tags
                 prim = stage.GetPrimAtPath(f"/World/envs/env_0/scene/{name}")
                 semantic_type = "class"

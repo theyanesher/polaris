@@ -22,7 +22,7 @@ from polaris.utils_.vis_utils import debug_plot
 import omni.replicator.core as rep
 
 env_cfg = parse_env_cfg(
-    "DROID-PutRedCup-no-curtain-osc",
+    "DROID-PutRedCup-no-curtain",
     device="cuda",
     num_envs=1,
     use_fabric=True,
@@ -118,7 +118,7 @@ def get_cam_param(calibration_path):
     return calibration
 
 
-env: ManagerBasedRLSplatEnv = gym.make("DROID-PutRedCup-no-curtain-osc", cfg=env_cfg)
+env: ManagerBasedRLSplatEnv = gym.make("DROID-PutRedCup-no-curtain", cfg=env_cfg)
 
 joint_limits = torch.tensor([
     [-2.8973,  2.8973],

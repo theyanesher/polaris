@@ -1,6 +1,7 @@
 import os
 import tyro
 import mediapy
+import imageio_ffmpeg
 
 # import wandb
 import tqdm
@@ -14,10 +15,15 @@ from pathlib import Path
 from isaaclab.app import AppLauncher
 
 from polaris.config import EvalArgs
-from polaris.utils_.eval_utils import randomize_object_poses, set_seed
+from polaris.utils_.eval_utils import PickMetricsTracker, randomize_object_poses, set_seed
 import numpy as np
 
 SUMMARY_ROW = "summary"
+
+# Mediapy only searches PATH for ffmpeg. Use the binary distributed with the
+# project dependency when a system-wide ffmpeg installation is unavailable.
+if not mediapy.video_is_available():
+    mediapy.set_ffmpeg(imageio_ffmpeg.get_ffmpeg_exe())
 
 
 def _episode_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -42,6 +48,26 @@ def _write_eval_results_with_summary(df: pd.DataFrame, csv_path: Path) -> None:
         float(summary_df["episode_length"].mean()) if num_episodes else 0.0
     )
 
+    grasp_summary = {}
+    for col in (
+        "grasp_succeeded",
+        "grasp_succeeded_first_attempt",
+        "pick_left_side",
+        "pick_right_side",
+        "pick_through_handle",
+    ):
+        if col in summary_df:
+            measured = summary_df[col].dropna()
+            values = measured.map(
+                lambda val: str(val).strip().lower() == "true"
+            )
+            grasp_summary[f"{col}_rate"] = float(values.mean()) if len(values) else 0.0
+    if "grasp_attempts" in summary_df:
+        attempts = pd.to_numeric(summary_df["grasp_attempts"], errors="coerce").dropna()
+        grasp_summary["avg_grasp_attempts"] = (
+            float(attempts.mean()) if len(attempts) else 0.0
+        )
+
     for col in ["num_success", "success_rate", "avg_progress", "avg_episode_length"]:
         if col not in episode_df.columns:
             episode_df[col] = pd.NA
@@ -55,6 +81,7 @@ def _write_eval_results_with_summary(df: pd.DataFrame, csv_path: Path) -> None:
         "success_rate": success_rate,
         "avg_progress": avg_progress,
         "avg_episode_length": avg_episode_length,
+        **grasp_summary,
     }
     episode_df = pd.concat([episode_df, pd.DataFrame([summary_row])], ignore_index=True)
     episode_df.to_csv(csv_path, index=False)
@@ -120,10 +147,13 @@ def main(eval_args: EvalArgs):
 
     env_cfg = parse_env_cfg(
         eval_args.environment,
+        # The sweep isolates one physical GPU per process. Keep IsaacLab on
+        # logical cuda:0, matching the last known-good evaluation path.
         device="cuda",
         num_envs=1,
         use_fabric=True,
     )
+    env_cfg.static_mesh_overlay = eval_args.static_mesh_overlay
 
     if eval_args.control_frequency_hz is not None:
         if eval_args.control_frequency_hz <= 0:
@@ -190,6 +220,8 @@ def main(eval_args: EvalArgs):
     obs, info = env.reset(
         object_positions=ic, expensive=True
     )
+    pick_metrics = PickMetricsTracker()
+    pick_metrics.reset(env)
     policy_client.reset()
 
     print(f" >>> Starting eval job from episode {episode + 1} of {rollouts} <<< ")
@@ -198,6 +230,7 @@ def main(eval_args: EvalArgs):
         obs, rew, term, trunc, info = env.step(
             torch.tensor(action).reshape(1, -1), expensive=True
         )
+        pick_metrics.update(env, action)
         if eval_args.save_video:
             frame = _video_frame_from_obs(obs, fallback=viz)
             if frame is not None:
@@ -218,6 +251,7 @@ def main(eval_args: EvalArgs):
                 "episode_length": bar.n,
                 "success": success,
                 "progress": info["rubric"]["progress"],
+                **pick_metrics.metrics(),
             }
             episode_df = pd.concat(
                 [episode_df, pd.DataFrame([episode_data])], ignore_index=True
@@ -232,6 +266,7 @@ def main(eval_args: EvalArgs):
             obs, info = env.reset(
                 object_positions=ic, expensive = True
             )
+            pick_metrics.reset(env)
 
             video = []
             if episode >= rollouts:
